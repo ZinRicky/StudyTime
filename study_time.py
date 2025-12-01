@@ -1,8 +1,9 @@
 import os
 import time
 from datetime import datetime
-import pandas as pd
+
 import matplotlib.pyplot as plt
+import pandas as pd
 
 data_file = "StudyTime.csv"
 if os.path.exists(data_file):
@@ -10,6 +11,7 @@ if os.path.exists(data_file):
     subjects = df["Subject"].unique().tolist()
 else:
     subjects = []
+
 
 def select_subject(subjects):
     print("What subject are you studying?")
@@ -58,13 +60,24 @@ def start_stopwatch():
         if cmd == "c":
             end_time = datetime.now()
             elapsed_seconds = end_time - start_time
-            elapsed_seconds = int(elapsed_seconds.total_seconds()) # transform to seconds and consider integer not float
+            # transform to seconds and consider integer not float
+            elapsed_seconds = (
+                elapsed_seconds
+                if type(elapsed_seconds) == int
+                else int(elapsed_seconds.total_seconds())
+            )
             print(f"You've studied for {format_time(elapsed_seconds)}\n")
 
         elif cmd == "s":
             end_time = datetime.now()
-            elapsed_seconds = int(elapsed_seconds.total_seconds()) # transform to seconds and consider integer not float
-            print(f"You've studied for {format_time(elapsed_seconds.total_seconds())}\n")
+            elapsed_seconds = (
+                elapsed_seconds
+                if type(elapsed_seconds) == int
+                else int(elapsed_seconds.total_seconds())
+            )  # transform to seconds and consider integer not float
+            print(
+                f"You've studied for {format_time(elapsed_seconds)}\n"
+            )
             return elapsed_seconds
 
         else:
@@ -121,18 +134,22 @@ def show_statistics():
     total_all = df["Seconds"].sum()
     print(f"\nOverall study time: {format_time(total_all)}\n")
 
+
 def show_plots():
     df = pd.read_csv(data_file)
     df_subj = df.groupby("Subject")["Seconds"].sum()
 
-    plt.figure(figsize=(6,6))
-    df_subj.plot(kind='pie', autopct='%1.1f%%')
+    plt.figure(figsize=(6, 6))
+    df_subj.plot(kind="pie", autopct="%1.1f%%")
     plt.title("Study Time Distribution by Subject")
     plt.ylabel("")
     plt.show()
 
+
 def add_time():
     pass
+
+
 # ---------- MAIN PROGRAM ----------
 
 
