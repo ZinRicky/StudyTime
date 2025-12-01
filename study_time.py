@@ -50,20 +50,21 @@ def start_stopwatch():
     print("  [c]  check elapsed time")
     print("  [s]  stop and save session")
 
-    start_time = time.perf_counter()
+    start_time = datetime.now()
 
     while True:
         cmd = input("Enter command (c/s): ").strip().lower()
 
         if cmd == "c":
-            now = time.perf_counter()
-            elapsed_seconds = now - start_time
+            end_time = datetime.now()
+            elapsed_seconds = end_time - start_time
+            elapsed_seconds = int(elapsed_seconds.total_seconds()) # transform to seconds and consider integer not float
             print(f"You've studied for {format_time(elapsed_seconds)}\n")
 
         elif cmd == "s":
-            end_time = time.perf_counter()
-            elapsed_seconds = end_time - start_time
-            print(f"You've studied for {format_time(elapsed_seconds)}\n")
+            end_time = datetime.now()
+            elapsed_seconds = int(elapsed_seconds.total_seconds()) # transform to seconds and consider integer not float
+            print(f"You've studied for {format_time(elapsed_seconds.total_seconds())}\n")
             return elapsed_seconds
 
         else:
