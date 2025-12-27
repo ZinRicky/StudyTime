@@ -177,7 +177,17 @@ def show_plots():
 
     # plotting the pie chart
     plt.figure(figsize=(6, 6))
-    df_subj.plot(kind="pie", autopct="%1.1f%%")
+    # Custom autopct that prints hours instead of percentage
+    def show_hours(pct, all_vals):
+        total = sum(all_vals)
+        hours = pct * total / 100
+        return f"{hours:.1f} h"
+
+    df_subj.plot(
+        kind="pie",
+        autopct=lambda pct: show_hours(pct, df_subj/3600),
+        ylabel=""
+    )
     plt.title("Study Time Distribution by Subject")
     plt.ylabel("")
     plt.show()
