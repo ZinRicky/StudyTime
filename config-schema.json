@@ -1,0 +1,19 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"$id": "https://raw.githubusercontent.com/ZinRicky/StudyTime/refs/heads/main/config-schema.json",
+	"title": "TUI StudyTime Settings",
+	"description": "Configuration for the TUI version of StudyTime",
+	"type": "object",
+	"properties": {
+		"version": {
+			"description": "Schema version, in the form of a single integer. Assuming v1 if not explicitly provided.",
+			"type": "integer",
+			"minimum": 1
+		},
+		"database-file": {
+			"description": "The file which you want to save your progress in.",
+			"type": "string"
+		}
+	},
+	"required": ["database-file"]
+}
