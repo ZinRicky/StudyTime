@@ -11,9 +11,12 @@
 			"minimum": 1
 		},
 		"database-file": {
-			"description": "The file which you want to save your progress in.",
+			"description": "The file which you want to save your progress in. Assuming `studytime.db` if not explicitly provided.",
+			"type": "string"
+		},
+		"theme": {
+			"description": "Preferred theme for the application. Defaults to `unipd-dark`. Can always be changed from within the application.",
 			"type": "string"
 		}
-	},
-	"required": ["database-file"]
+	}
 }
