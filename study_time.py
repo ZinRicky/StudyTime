@@ -4,7 +4,7 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 import pandas as pd
 
-# importing the cvs in which to record study sessions
+# importing the csv in which to record study sessions
 # subjects = list of subjects to study
 data_file = "StudyTime.csv"
 if os.path.exists(data_file):
@@ -128,6 +128,37 @@ def log_study_time(subject, seconds, start_time):
     print(f"You have just studied {subject} for {format_time(seconds)}.\n")
 
 
+def weekly_df(df, past_weeks=1):
+    """
+    Return daily study time for a rolling week.
+
+    past_weeks=1 → last 7 days (today included)
+    past_weeks=2 → 7 days before last week
+    """
+
+    df["Date"] = pd.to_datetime(df["Date"]).dt.normalize()
+
+    today = pd.Timestamp.today().normalize()
+
+    # Define rolling window
+    end_day = today - pd.Timedelta(days=7 * (past_weeks - 1))
+    start_day = end_day - pd.Timedelta(days=6)
+
+    # Filter
+    df_selected = df[(df["Date"] >= start_day) & (df["Date"] <= end_day)]
+
+    # Aggregate per day
+    df_daily = df_selected.groupby("Date")["Seconds"].sum()
+
+    # Full 7-day range (forces missing days)
+    full_range = pd.date_range(start=start_day, end=end_day, freq="D")
+
+    df_daily_full = df_daily.reindex(full_range, fill_value=0)
+
+    return df_daily_full
+
+
+
 def show_statistics():
     """
     Prints some statistics related to previous study sessions
@@ -143,24 +174,24 @@ def show_statistics():
     # Total minutes per subject
     print("\nTotal minutes per subject:")
     df_subj = df.groupby("Subject")["Seconds"].sum()
-    print(type(df_subj[0]))
     print(df_subj.apply(format_time))
 
-    # Daily totals
-    print("\nTotal minutes per day:")
-    df["Date"] = pd.to_datetime(df["Date"])
-    df_date = df.groupby("Date")["Seconds"].sum()
-    # Create complete date range from first study day to today
-    full_range = pd.date_range(start=df["Date"].min(), end=pd.Timestamp.today())
+    # Daily totals of last last week
+    df_daily_full = weekly_df(df, 1)
+    print("\n Total minutes studied per day in the last week")
+    print(df_daily_full.apply(format_time))
 
-    # Reindex → missing days become NaN → fill with 0
-    df_date_full = df_date.reindex(full_range, fill_value=0)
-    print(df_date_full.apply(format_time))
+    # Overall total study time of the past week
+    total_all = df_daily_full.sum()
+    print(f"\nOverall study time in the last week: {format_time(total_all)}\n")
 
-    # Overall total
-    total_all = df["Seconds"].sum()
-    print(f"\nOverall study time: {format_time(total_all)}\n")
+    # Comparison with the previous week
+    df_daily_full_prev_week = weekly_df(df, 2)
+    #print("\n Total minutes studied per day in the previous week")
+    #print(df_daily_full_prev_week.apply(format_time))
 
+    total_all_prev_week = df_daily_full_prev_week.sum()
+    print(f"\nOverall study time in the previous week: {format_time(total_all_prev_week)}\n")
 
 def show_plots():
     """
@@ -177,6 +208,7 @@ def show_plots():
 
     # plotting the pie chart
     plt.figure(figsize=(6, 6))
+
     # Custom autopct that prints hours instead of percentage
     def show_hours(pct, all_vals):
         total = sum(all_vals)
@@ -184,9 +216,7 @@ def show_plots():
         return f"{hours:.1f} h"
 
     df_subj.plot(
-        kind="pie",
-        autopct=lambda pct: show_hours(pct, df_subj/3600),
-        ylabel=""
+        kind="pie", autopct=lambda pct: show_hours(pct, df_subj / 3600), ylabel=""
     )
     plt.title("Study Time Distribution by Subject")
     plt.ylabel("")
@@ -194,26 +224,10 @@ def show_plots():
 
     # computing values for histogram of study time
     # of the last week
-    df["Date"] = pd.to_datetime(df["Date"])
-
-    today = pd.Timestamp.today().normalize()
-    last_week = today - pd.Timedelta(days=7)
-
-    # Filter last 7 days
-    df_last_week = df[df["Date"] >= last_week]
-
-    # Group by day
-    df_daily = df_last_week.groupby("Date")["Seconds"].sum()
-
-    # Create complete date range from first study day to today
-    full_range = pd.date_range(start=df_last_week["Date"].min(), end=pd.Timestamp.today())
-
-    # Reindex → missing days become NaN → fill with 0
-    df_daily_full = df_daily.reindex(full_range, fill_value=0)
+    df_daily_full = weekly_df(df, 1)
 
     # Convert seconds → hours
     df_daily_hours = df_daily_full / 3600
-
     # Mean study time (in hours)
     mean_hours = df_daily_hours.mean()
 
