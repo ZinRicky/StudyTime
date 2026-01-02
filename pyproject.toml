@@ -5,7 +5,6 @@ description = "Simple TUI program to track and display time spent studying."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "pandas>=2.3.3",
     "textual>=6.11.0",
     "textual-plotext>=1.0.1",
 ]

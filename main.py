@@ -2,14 +2,26 @@ import json
 import sqlite3
 
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timezone
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Center, Grid
+from textual.reactive import reactive
 from textual.screen import Screen, ModalScreen
 from textual.theme import Theme
-from textual.widgets import Button, Footer, Header, Label, ListItem, ListView, Pretty
+from textual.widgets import (
+    Button,
+    DataTable,
+    Footer,
+    Header,
+    Input,
+    Label,
+    ListItem,
+    ListView,
+    Pretty,
+)
+from textual.widgets.data_table import RowKey
 from typing import NamedTuple
 from uuid import uuid4
 
@@ -55,6 +67,21 @@ class SQLiteMasterTableEntry(NamedTuple):
     tbl_name: str
     rootpage: int
     sql: str
+
+
+class SubjectEditEntry(NamedTuple):
+    subject_id: str
+    subject_name: str
+    added_time: str
+    updated_time: str
+
+    def to_ui(self) -> tuple[str, ...]:
+        return (
+            self.subject_id,
+            self.subject_name,
+            self.added_time,
+            self.updated_time if self.added_time != self.updated_time else "-",
+        )
 
 
 class Config:
@@ -106,9 +133,8 @@ class Database:
             if commit:
                 exec_connection.commit()
         except sqlite3.ProgrammingError as e:
-            raise e
-        finally:
             exec_connection.close()
+            raise e
 
     def db_execute_many(
         self,
@@ -126,9 +152,8 @@ class Database:
             if commit:
                 exec_many_connection.commit()
         except sqlite3.ProgrammingError as e:
-            raise e
-        finally:
             exec_many_connection.close()
+            raise e
 
     def db_query(self, command: str) -> list[tuple]:
         """
@@ -144,7 +169,11 @@ class Database:
 
     def db_write_meta_info(self) -> None:
         self.db_execute(
-            "CREATE TABLE meta_info(key TEXT PRIMARY KEY, value) WITHOUT ROWID;"
+            "CREATE TABLE meta_info("
+            + "key TEXT PRIMARY KEY,"
+            + "value"
+            + ") "
+            + "WITHOUT ROWID;"
         )
         meta_info_data: list[tuple[str, str]] = [("Version", str(self.version))]
         self.db_execute_many("INSERT INTO meta_info VALUES(?, ?);", meta_info_data)
@@ -162,7 +191,11 @@ class Database:
     def db_write_dim_subject(self) -> None:
         self.db_execute(
             "CREATE TABLE dim_subject("
-            + "subject_id TEXT PRIMARY KEY, subject_name TEXT, added_time TEXT);"
+            + "subject_id TEXT PRIMARY KEY, "
+            + "subject_name TEXT, "
+            + "added_time TEXT, "
+            + "updated_time TEXT"
+            + ");"
         )
 
     def db_validate_dim_subject(self) -> None:
@@ -171,7 +204,12 @@ class Database:
     def db_write_fact_session(self) -> None:
         self.db_execute(
             "CREATE TABLE fact_session("
-            + "subject_id TEXT PRIMARY KEY, start_time TEXT, end_time TEXT);"
+            + "session_id TEXT PRIMARY KEY, "
+            + "subject_id TEXT, "
+            + "start_time TEXT, "
+            + "end_time TEXT, "
+            + "duration INT"
+            + ");"
         )
 
     def db_validate_fact_session(self) -> None:
@@ -206,10 +244,10 @@ class MainMenuScreen(Screen):
                 id="main-menu-title",
             )
         yield ListView(
-            ListItem(Label("1. Begin a new study session."), id="main-menu-study"),
-            ListItem(Label("2. Add a new subject."), id="main-menu-subject"),
-            ListItem(Label("3. View study sessions’ table."), id="main-menu-sessions"),
-            ListItem(Label("4. View summary plots."), id="main-menu-plots"),
+            ListItem(Label("(1) Begin a new study session."), id="main-menu-study"),
+            ListItem(Label("(2) Add or edit a subject."), id="main-menu-subject"),
+            ListItem(Label("(3) View study sessions’ table."), id="main-menu-sessions"),
+            ListItem(Label("(4) View summary plots."), id="main-menu-plots"),
             id="main-menu-choices",
         )
         # yield Pretty("", id="debug-line")
@@ -229,12 +267,184 @@ class MainMenuScreen(Screen):
             case 0:
                 self.app.install_screen(NewStudySessionScreen(), "Study-Session")
                 self.app.push_screen("Study-Session")
+            case 1:
+                self.app.install_screen(SubjectsScreen(), "Edit-Subjects")
+                self.app.push_screen("Edit-Subjects")
+
+    def on_key(self, event: events.Key) -> None:
+        if event.name in "1234":
+            self.query_one("#main-menu-choices", ListView).index = int(event.name) - 1
+            self.query_one("#main-menu-choices", ListView).action_select_cursor()
+
+
+class NewStudySessionScreen(Screen):
+    BINDINGS = [
+        Binding(
+            "escape",
+            "back_to_main_menu",
+            "Main Menu",
+            show=True,
+            tooltip="Decide whether you want to save the current "
+            + "study session (if any) and go back to the main menu.",
+        )
+    ]
+
+    def on_mount(self) -> None:
+        self.previous_sub_title: str = self.app.sub_title
+        self.app.sub_title = "Study Session"
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Label("Codroipo")
+        yield Footer(show_command_palette=False)
+
+    def action_back_to_main_menu(self) -> None:
+        self.app.sub_title = self.previous_sub_title
+        self.app.pop_screen()
+        self.app.uninstall_screen(self)
+
+
+class SubjectsScreen(Screen):
+    BINDINGS = [
+        Binding(
+            "a",
+            "add_subject",
+            "Add",
+            show=True,
+            tooltip="Add a new subject to the database",
+        ),
+        Binding(
+            "e",
+            "edit_subject",
+            "Edit",
+            show=True,
+            tooltip="Edit the currently selected cell.",
+        ),
+        Binding(
+            "d",
+            "delete_subject",
+            "Delete",
+            show=True,
+            tooltip="Delete the currently selected subject and all related study sessions.",
+        ),
+        Binding(
+            "s",
+            "sort_table",
+            "Sort",
+            show=True,
+            tooltip="Toggle between sorting the table by subject name, creation date and last update date.",
+        ),
+        Binding(
+            "escape",
+            "back_to_main_menu",
+            "Main Menu",
+            show=True,
+            tooltip="Go back to the main menu.",
+        ),
+        Binding(
+            "f5",
+            "refresh_table",
+            "Refresh table layout",
+            show=False,
+            tooltip="Force the refresh of the table layout.",
+        ),
+    ]
+
+    sort_priority: reactive[tuple[str, str] | None] = reactive(None)
+
+    async def on_mount(self) -> None:
+        self.previous_sub_title: str = self.app.sub_title
+        self.app.sub_title = "Add / Edit subjects"
+        self.query_one("#subjects-table", DataTable).cursor_type = "row"
+        self.refresh_table()
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowSelected) -> None:
+        self.current_hi_row: int = event.cursor_row
+        self.current_hi_row_key: RowKey = event.row_key
+        self.current_hi_row_name: str = event.data_table.get_cell(
+            self.current_hi_row_key, "Subject"
+        )
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield DataTable(id="subjects-table")
+        # yield Pretty("Test")
+        yield Footer(show_command_palette=False)
+
+    def action_refresh_table(self) -> None:
+        self.refresh_table()
+
+    def refresh_table(self) -> None:
+        my_tui_table: DataTable = self.query_one("#subjects-table", DataTable)
+        my_tui_table.clear(columns=True)
+        for col in ("Subject", "Added", "Last edit"):
+            my_tui_table.add_column(col, key=col)
+        my_subject_data: list[SubjectEditEntry] = [
+            SubjectEditEntry(*subject_row)
+            for subject_row in self.app.st_database.db_query(
+                "SELECT subject_id, subject_name, added_time, updated_time FROM dim_subject;"
+            )
+        ]
+        if my_subject_data:
+            for row in my_subject_data:
+                ui_row: tuple[str, ...] = row.to_ui()
+                my_tui_table.add_row(*ui_row[1:], key=ui_row[0])
+        # self.query_one(Pretty).update(my_tui_table.rows)
+
+    def action_add_subject(self) -> None:
+        self.app.push_screen(AddSubjectScreen())
+
+    async def action_edit_subject(self) -> None:
+        def db_edit_row(result: str | None) -> None:
+            if result is not None:
+                current_edit_time: str = datetime.now(tz=timezone.utc).isoformat()
+                self.app.st_database.db_execute(
+                    "UPDATE dim_subject SET subject_name = ?, updated_time = ? WHERE subject_id = ?;",
+                    (
+                        result,
+                        current_edit_time,
+                        self.current_hi_row_key.value,
+                    ),
+                    commit=True,
+                )
+                self.query_one("#subjects-table", DataTable).update_cell(
+                    self.current_hi_row_key, "Subject", result
+                )
+                self.query_one("#subjects-table", DataTable).update_cell(
+                    self.current_hi_row_key, "Last edit", current_edit_time
+                )
+
+        self.app.push_screen(EditSubjectScreen(), db_edit_row)
+
+    def action_sort_table(self) -> None:
+        match self.sort_priority:
+            case None:
+                self.sort_priority = ("Subject", "Added")
+            case ("Subject", "Added"):
+                self.sort_priority = ("Added", "Subject")
+            case ("Added", "Subject"):
+                self.sort_priority = ("Last edit", "Subject")
+            case ("Last edit", "Subject"):
+                self.sort_priority = ("Subject", "Added")
+        self.mutate_reactive(SubjectsScreen.sort_priority)
+
+        subjects_table_to_be_sorted: DataTable = self.query_one(
+            "#subjects-table", DataTable
+        )
+        # self.query_one(Pretty).update(subjects_table_to_be_sorted.columns)
+        subjects_table_to_be_sorted.sort(*self.sort_priority)
+        self.app.notify(f"Table sorted by {self.sort_priority[0]}.", timeout=1)
+
+    def action_back_to_main_menu(self) -> None:
+        self.app.sub_title = self.previous_sub_title
+        self.app.pop_screen()
+        self.app.uninstall_screen(self)
 
 
 class ConfirmExitScreen(ModalScreen):
     def compose(self) -> ComposeResult:
         yield Grid(
-            Label("Are you sure you want to quit?", id="question"),
+            Label("Are you sure you want to quit?", id="prompt"),
             Button("Quit", variant="error", id="quit"),
             Button("Cancel", variant="primary", id="cancel"),
             id="dialog",
@@ -257,35 +467,172 @@ class ConfirmExitScreen(ModalScreen):
                 self.app.action_focus_previous()
             case "right":
                 self.app.action_focus_next()
-            case _:
-                pass
 
 
-class NewStudySessionScreen(Screen):
-    BINDINGS = [
-        Binding(
-            "escape",
-            "back_to_main_menu",
-            "Main Menu",
-            show=True,
-            tooltip="Decide whether you want to save the current "
-            + "study session (if any) and go back to the main menu.",
-        )
-    ]
-
-    def on_mount(self) -> None:
-        self.previous_sub_title: str = self.app.sub_title
-        self.app.sub_title = "Study Session"
-
+class AddSubjectScreen(ModalScreen):
     def compose(self) -> ComposeResult:
-        yield Header()
-        yield Label("Codroipo")
-        yield Footer()
+        yield Grid(
+            Label(
+                "Insert the name of the subject and press `Enter` or the `Done` button.",
+                id="prompt",
+            ),
+            Input(
+                placeholder="Subject name",
+                type="text",
+                max_length=256,
+                valid_empty=False,
+                id="new-subject-name",
+            ),
+            Button("Done", variant="success", id="done-button"),
+            Button("Cancel", variant="error", id="cancel-button"),
+            id="dialog",
+        )
+        # yield Pretty("", id="debugger")
 
-    def action_back_to_main_menu(self) -> None:
-        self.app.sub_title = self.previous_sub_title
-        self.app.pop_screen()
-        self.app.uninstall_screen(self)
+    async def on_button_pressed(self, button: Button.Pressed):
+        match button.button.id:
+            case "done-button":
+                new_subject_input: Input = self.query_one("#new-subject-name", Input)
+                if new_subject_input.is_valid:
+                    await new_subject_input.action_submit()
+            case "cancel-button":
+                self.app.pop_screen()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        new_subject_name: str = event.value.strip()
+        if not new_subject_name:
+            self.app.notify(
+                "Empty subject name.",
+                title="Error",
+                severity="error",
+                timeout=3,
+            )
+        else:
+            # self.query_one("#debugger", Pretty).update(new_subject_name)
+            subject_ids: set[str] = {
+                x[0]
+                for x in self.app.st_database.db_query(
+                    "SELECT subject_id FROM dim_subject;"
+                )
+            }
+            subject_names: set[str] = {
+                x[0].lower()
+                for x in self.app.st_database.db_query(
+                    "SELECT subject_name FROM dim_subject;"
+                )
+            }
+
+            if new_subject_name.lower() in subject_names:
+                self.app.notify(
+                    "Please choose a different name or edit the existing subject.",
+                    title="A subject with the same name already exists!",
+                    severity="error",
+                    timeout=5,
+                )
+            else:
+                new_subject_id: str = str(uuid4())
+                while new_subject_id in subject_ids:
+                    new_subject_id = str(uuid4())
+                new_subject_datetime: datetime = datetime.now(tz=timezone.utc)
+                self.app.st_database.db_execute(
+                    "INSERT INTO dim_subject VALUES(?, ?, ?, ?)",
+                    (
+                        new_subject_id,
+                        new_subject_name,
+                        new_subject_datetime.isoformat(),
+                        new_subject_datetime.isoformat(),
+                    ),
+                    commit=True,
+                )
+                self.app.pop_screen()
+                self.app.screen.refresh_table()
+
+    def on_key(self, event: events.Key) -> None:
+        if event.name == "escape":
+            self.app.pop_screen()
+            event.stop()
+
+
+class EditSubjectScreen(ModalScreen[str]):
+    def compose(self) -> ComposeResult:
+        yield Grid(
+            Label(
+                "Insert the new name for the subject and press `Enter` or the `Done` button.",
+                id="prompt",
+            ),
+            Input(
+                value=self.app.get_screen(
+                    "Edit-Subjects", SubjectsScreen
+                ).current_hi_row_name,
+                placeholder="Subject name",
+                type="text",
+                max_length=256,
+                valid_empty=False,
+                id="new-subject-name",
+            ),
+            Button("Done", variant="success", id="done-button"),
+            Button("Cancel", variant="error", id="cancel-button"),
+            id="dialog",
+        )
+        # yield Pretty("", id="debugger")
+
+    async def on_button_pressed(self, button: Button.Pressed):
+        match button.button.id:
+            case "done-button":
+                new_subject_input: Input = self.query_one("#new-subject-name", Input)
+                if new_subject_input.is_valid:
+                    await new_subject_input.action_submit()
+            case "cancel-button":
+                self.dismiss(None)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        new_subject_name: str = event.value.strip()
+        if not new_subject_name:
+            self.app.notify(
+                "Empty subject name.",
+                title="Error",
+                severity="error",
+                timeout=3,
+            )
+        elif (
+            new_subject_name
+            == self.app.get_screen("Edit-Subjects", SubjectsScreen).current_hi_row_name
+        ):
+            self.app.notify(
+                "The new name should not match the previous.",
+                title="Error",
+                severity="error",
+                timeout=3,
+            )
+        else:
+            # self.query_one("#debugger", Pretty).update(new_subject_name)
+            subject_ids: set[str] = {
+                x[0]
+                for x in self.app.st_database.db_query(
+                    "SELECT subject_id FROM dim_subject;"
+                )
+            }
+            subject_names: set[str] = {
+                x[0].lower()
+                for x in self.app.st_database.db_query(
+                    "SELECT subject_name FROM dim_subject;"
+                )
+            }
+
+            if new_subject_name.lower() in subject_names:
+                self.app.notify(
+                    "Please choose a different name or edit the existing subject.",
+                    title="A subject with the same name already exists!",
+                    severity="error",
+                    timeout=5,
+                )
+            else:
+                self.dismiss(result=new_subject_name)
+
+    def on_key(self, event: events.Key) -> None:
+        if event.name == "escape":
+            self.app.pop_screen()
+            event.stop()
 
 
 class StudyTimeApp(App):
@@ -314,38 +661,40 @@ class StudyTimeApp(App):
         align: center middle;
     }
 
-    #main-menu-title {
-        display: block;
-        text-style: bold underline;
-        color: $primary;
-        width: auto;
-        margin: 1;
-    }
-
-    ListView {
-        align-horizontal: center;
-        height: auto;
-        background: $background;
-
-        &:focus {
-            background-tint: $background;
+    MainMenuScreen {
+        #main-menu-title {
+            display: block;
+            text-style: bold underline;
+            color: $primary;
+            width: auto;
+            margin: 1;
         }
 
-        ListItem {
-            width: 35;
-            margin: 1;
-            padding-left: 2;
-            color: $text;
+        ListView#main-menu-choices {
+            align-horizontal: center;
+            height: auto;
             background: $background;
 
-            &.-highlight {
-                color: $primary;
-                text-style: underline;
-                padding-left: 0;
+            &:focus {
+                background-tint: $background;
             }
 
-            &:hover {
-                text-style: underline;
+            ListItem {
+                width: 35;
+                margin: 1;
+                padding-left: 2;
+                color: $text;
+                background: $background;
+
+                &.-highlight {
+                    color: $primary;
+                    text-style: underline;
+                    padding-left: 0;
+                }
+
+                &:hover {
+                    text-style: underline;
+                }
             }
         }
     }
@@ -364,7 +713,7 @@ class StudyTimeApp(App):
             background: $surface;
         }
 
-        #question {
+        #prompt {
             column-span: 2;
             height: 1fr;
             width: 1fr;
@@ -381,6 +730,48 @@ class StudyTimeApp(App):
             }
         }
     }
+
+    AddSubjectScreen, EditSubjectScreen {
+        align: center middle;
+
+        #dialog {
+            grid-size: 2;
+            grid-gutter: 1 2;
+            grid-rows: 1fr 1fr 3;
+            width: 75%;
+            padding: 0 1;
+            height: 12;
+            border: thick $background 80%;
+            background: $surface;
+            content-align: center middle;
+        }
+
+        #prompt {
+            column-span: 2;
+            height: 1fr;
+            width: 1fr;
+            content-align: center middle;
+            padding-top: 1;
+        }
+
+        Input {
+            column-span: 2;
+        }
+
+        Button {
+            width: 100%;
+        }
+    }
+
+    SubjectsScreen {
+        #subjects-table {
+            width: auto;
+        }
+
+        # Pretty {
+        #     max-width: 30;
+        # }
+    }
     """
 
     async def on_mount(self) -> None:
@@ -390,9 +781,8 @@ class StudyTimeApp(App):
         # self.query_one("#debug-line", Pretty).update(self.available_themes)
         self.theme = self.st_config.theme
         # self.query_one("#main-menu-choices").focus()
-        self.st_database: Database = Database(config=self.st_config)
-
         self.push_screen("Main-Menu")
+        self.st_database: Database = Database(config=self.st_config)
 
     def action_my_quit(self) -> None:
         self.push_screen(ConfirmExitScreen())
