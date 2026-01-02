@@ -358,21 +358,18 @@ class SubjectsScreen(Screen):
         self.query_one("#subjects-table", DataTable).cursor_type = "row"
         self.refresh_table()
 
-    def on_data_table_row_highlighted(self, event: DataTable.RowSelected) -> None:
-        self.current_hi_row: int = event.cursor_row
-        self.current_hi_row_key: RowKey = event.row_key
-        self.current_hi_row_name: str = event.data_table.get_cell(
-            self.current_hi_row_key, "Subject"
-        )
-
     def compose(self) -> ComposeResult:
         yield Header()
         yield DataTable(id="subjects-table")
         # yield Pretty("Test")
         yield Footer(show_command_palette=False)
 
-    def action_refresh_table(self) -> None:
-        self.refresh_table()
+    def on_data_table_row_highlighted(self, event: DataTable.RowSelected) -> None:
+        self.current_hi_row: int = event.cursor_row
+        self.current_hi_row_key: RowKey = event.row_key
+        self.current_hi_row_name: str = event.data_table.get_cell(
+            self.current_hi_row_key, "Subject"
+        )
 
     def refresh_table(self) -> None:
         my_tui_table: DataTable = self.query_one("#subjects-table", DataTable)
@@ -392,7 +389,34 @@ class SubjectsScreen(Screen):
         # self.query_one(Pretty).update(my_tui_table.rows)
 
     def action_add_subject(self) -> None:
-        self.app.push_screen(AddSubjectScreen())
+        def db_add_row(result: str | None) -> None:
+            subject_ids: set[str] = {
+                x[0]
+                for x in self.app.st_database.db_query(
+                    "SELECT subject_id FROM dim_subject;"
+                )
+            }
+            new_subject_id: str = str(uuid4())
+            while new_subject_id in subject_ids:
+                new_subject_id = str(uuid4())
+            new_subject_datetime: datetime = datetime.now(tz=timezone.utc)
+
+            self.app.st_database.db_execute(
+                "INSERT INTO dim_subject VALUES(?, ?, ?, ?)",
+                (
+                    new_subject_id,
+                    result,
+                    new_subject_datetime.isoformat(),
+                    new_subject_datetime.isoformat(),
+                ),
+                commit=True,
+            )
+
+            self.query_one("#subjects-table", DataTable).add_row(
+                result, new_subject_datetime.isoformat(), "-", key=new_subject_id
+            )
+
+        self.app.push_screen(AddSubjectScreen(), db_add_row)
 
     async def action_edit_subject(self) -> None:
         def db_edit_row(result: str | None) -> None:
@@ -434,6 +458,37 @@ class SubjectsScreen(Screen):
         # self.query_one(Pretty).update(subjects_table_to_be_sorted.columns)
         subjects_table_to_be_sorted.sort(*self.sort_priority)
         self.app.notify(f"Table sorted by {self.sort_priority[0]}.", timeout=1)
+
+    def action_delete_subject(self) -> None:
+        def db_delete_subject(result: bool | None) -> None:
+            if result:
+                self.app.st_database.db_execute(
+                    "DELETE FROM fact_session WHERE subject_id = ?;",
+                    (self.current_hi_row_key.value,),
+                    commit=True,
+                )
+                self.app.st_database.db_execute(
+                    "DELETE FROM dim_subject WHERE subject_id = ?;",
+                    (self.current_hi_row_key.value,),
+                    commit=True,
+                )
+                self.query_one("#subjects-table", DataTable).remove_row(
+                    self.current_hi_row_key
+                )
+                self.refresh_table()
+
+        if self.query_one("#subjects-table", DataTable).row_count:
+            self.app.push_screen(DeleteSubjectScreen(), db_delete_subject)
+        else:
+            self.app.notify(
+                "There is no subject to delete",
+                title="Error",
+                severity="error",
+                timeout=1,
+            )
+
+    def action_refresh_table(self) -> None:
+        self.refresh_table()
 
     def action_back_to_main_menu(self) -> None:
         self.app.sub_title = self.previous_sub_title
@@ -493,8 +548,7 @@ class AddSubjectScreen(ModalScreen):
         match button.button.id:
             case "done-button":
                 new_subject_input: Input = self.query_one("#new-subject-name", Input)
-                if new_subject_input.is_valid:
-                    await new_subject_input.action_submit()
+                await new_subject_input.action_submit()
             case "cancel-button":
                 self.app.pop_screen()
 
@@ -509,12 +563,6 @@ class AddSubjectScreen(ModalScreen):
             )
         else:
             # self.query_one("#debugger", Pretty).update(new_subject_name)
-            subject_ids: set[str] = {
-                x[0]
-                for x in self.app.st_database.db_query(
-                    "SELECT subject_id FROM dim_subject;"
-                )
-            }
             subject_names: set[str] = {
                 x[0].lower()
                 for x in self.app.st_database.db_query(
@@ -530,26 +578,11 @@ class AddSubjectScreen(ModalScreen):
                     timeout=5,
                 )
             else:
-                new_subject_id: str = str(uuid4())
-                while new_subject_id in subject_ids:
-                    new_subject_id = str(uuid4())
-                new_subject_datetime: datetime = datetime.now(tz=timezone.utc)
-                self.app.st_database.db_execute(
-                    "INSERT INTO dim_subject VALUES(?, ?, ?, ?)",
-                    (
-                        new_subject_id,
-                        new_subject_name,
-                        new_subject_datetime.isoformat(),
-                        new_subject_datetime.isoformat(),
-                    ),
-                    commit=True,
-                )
-                self.app.pop_screen()
-                self.app.screen.refresh_table()
+                self.dismiss(new_subject_name)
 
     def on_key(self, event: events.Key) -> None:
         if event.name == "escape":
-            self.app.pop_screen()
+            self.dismiss(None)
             event.stop()
 
 
@@ -606,12 +639,6 @@ class EditSubjectScreen(ModalScreen[str]):
             )
         else:
             # self.query_one("#debugger", Pretty).update(new_subject_name)
-            subject_ids: set[str] = {
-                x[0]
-                for x in self.app.st_database.db_query(
-                    "SELECT subject_id FROM dim_subject;"
-                )
-            }
             subject_names: set[str] = {
                 x[0].lower()
                 for x in self.app.st_database.db_query(
@@ -627,12 +654,42 @@ class EditSubjectScreen(ModalScreen[str]):
                     timeout=5,
                 )
             else:
-                self.dismiss(result=new_subject_name)
+                self.dismiss(new_subject_name)
 
     def on_key(self, event: events.Key) -> None:
         if event.name == "escape":
-            self.app.pop_screen()
+            self.dismiss(None)
             event.stop()
+
+
+class DeleteSubjectScreen(ModalScreen):
+    def compose(self) -> ComposeResult:
+        yield Grid(
+            Label(
+                "Do you want to delete this subject and all related sessions?",
+                id="prompt",
+            ),
+            Button("Yes", variant="success", id="done-button"),
+            Button("No", variant="error", id="cancel-button"),
+            id="dialog",
+        )
+
+    async def on_button_pressed(self, button: Button.Pressed):
+        match button.button.id:
+            case "done-button":
+                self.dismiss(True)
+            case "cancel-button":
+                self.dismiss(False)
+
+    def on_key(self, event: events.Key) -> None:
+        match event.name:
+            case "escape":
+                self.dismiss(None)
+                event.stop()
+            case "left":
+                self.app.action_focus_previous()
+            case "right":
+                self.app.action_focus_next()
 
 
 class StudyTimeApp(App):
@@ -731,7 +788,7 @@ class StudyTimeApp(App):
         }
     }
 
-    AddSubjectScreen, EditSubjectScreen {
+    AddSubjectScreen, EditSubjectScreen, DeleteSubjectScreen {
         align: center middle;
 
         #dialog {
@@ -760,6 +817,12 @@ class StudyTimeApp(App):
 
         Button {
             width: 100%;
+        }
+    }
+
+    DeleteSubjectScreen {
+        #dialog {
+            grid-rows: 1fr 3;
         }
     }
 
