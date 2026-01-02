@@ -1,10 +1,7 @@
 [project]
 name = "studytime-tui"
-version = "0.1.0"
+version = "0.1.1"
 description = "Simple TUI program to track and display time spent studying."
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = [
-    "textual>=6.11.0",
-    "textual-plotext>=1.0.1",
-]
+dependencies = ["textual>=6.11.0", "textual-plotext>=1.0.1"]
