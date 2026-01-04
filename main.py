@@ -13,6 +13,7 @@ from textual.theme import Theme
 from textual.widgets import (
     Button,
     DataTable,
+    Digits,
     Footer,
     Header,
     Input,
@@ -20,6 +21,7 @@ from textual.widgets import (
     ListItem,
     ListView,
     Pretty,
+    Select,
 )
 from textual.widgets.data_table import RowKey
 from typing import NamedTuple
@@ -235,6 +237,10 @@ class Database:
             self.db_validate_fact_session()
 
 
+class SessionTimer(Digits):
+    pass
+
+
 class MainMenuScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
@@ -265,7 +271,7 @@ class MainMenuScreen(Screen):
     def on_list_view_selected(self, highlighted_item: ListView.Selected) -> None:
         match highlighted_item.index:
             case 0:
-                self.app.install_screen(NewStudySessionScreen(), "Study-Session")
+                self.app.install_screen(StudySessionScreen(), "Study-Session")
                 self.app.push_screen("Study-Session")
             case 1:
                 self.app.install_screen(SubjectsScreen(), "Edit-Subjects")
@@ -277,7 +283,7 @@ class MainMenuScreen(Screen):
             self.query_one("#main-menu-choices", ListView).action_select_cursor()
 
 
-class NewStudySessionScreen(Screen):
+class StudySessionScreen(Screen):
     BINDINGS = [
         Binding(
             "escape",
@@ -295,7 +301,21 @@ class NewStudySessionScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield Label("Codroipo")
+        with Center():
+            yield SessionTimer("00:00:00", id="session-timer")
+        with Center():
+            yield Grid(
+                Button("Start", variant="success", id="study-session-start-pause"),
+                Select(
+                    self.app.st_database.db_query(
+                        "SELECT subject_name, subject_id from dim_subject ORDER BY subject_name;"
+                    ),
+                    prompt="Select subject",
+                ),
+                Button("Stop", variant="error", disabled=True),
+                id="study-session-commands",
+            )
+        # yield Pretty("")
         yield Footer(show_command_palette=False)
 
     def action_back_to_main_menu(self) -> None:
@@ -472,9 +492,9 @@ class SubjectsScreen(Screen):
                     (self.current_hi_row_key.value,),
                     commit=True,
                 )
-                self.query_one("#subjects-table", DataTable).remove_row(
-                    self.current_hi_row_key
-                )
+                # self.query_one("#subjects-table", DataTable).remove_row(
+                #     self.current_hi_row_key
+                # )
                 self.refresh_table()
 
         if self.query_one("#subjects-table", DataTable).row_count:
@@ -756,6 +776,33 @@ class StudyTimeApp(App):
         }
     }
 
+    StudySessionScreen {
+        #session-timer {
+            width: auto;
+            margin-bottom: 1;
+        }
+
+        #study-session-commands {
+            grid-size: 3 1;
+            grid-gutter: 1 2;
+            grid-columns: 15 1fr 15;
+            grid-rows: 3;
+            padding: 0 1;
+            max-width: 75%;
+            height: auto;
+
+            Button {
+                width: 100%;
+            }
+        }
+    }
+
+    SubjectsScreen {
+        #subjects-table {
+            width: auto;
+        }
+    }
+
     ConfirmExitScreen {
         align: center middle;
 
@@ -824,16 +871,6 @@ class StudyTimeApp(App):
         #dialog {
             grid-rows: 1fr 3;
         }
-    }
-
-    SubjectsScreen {
-        #subjects-table {
-            width: auto;
-        }
-
-        # Pretty {
-        #     max-width: 30;
-        # }
     }
     """
 
