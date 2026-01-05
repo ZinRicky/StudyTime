@@ -725,7 +725,7 @@ class SessionsScreen(Screen):
     def refresh_table(self) -> None:
         my_tui_table: DataTable = self.query_one("#sessions-table", DataTable)
         my_tui_table.clear(columns=True)
-        for col in ("Subject", "Start time", "Duration"):
+        for col in ("Subject", "Start time", "Duration (s)"):
             my_tui_table.add_column(col, key=col)
         my_session_data: list[SessionEntry] = [
             SessionEntry(*session_row)
