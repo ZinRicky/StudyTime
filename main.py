@@ -334,7 +334,7 @@ class MainMenuScreen(Screen):
 class StudySessionScreen(Screen):
     BINDINGS = [
         Binding(
-            "ctrl_z",
+            "z",
             "force_reset",
             "Cancel current session",
             show=True,
@@ -390,6 +390,8 @@ class StudySessionScreen(Screen):
         play_button.remove_class("-warning")
         play_button.add_class("start")
         play_button.add_class("-success")
+
+        self.refresh_bindings()
 
     def action_back_to_main_menu(self) -> None:
         self.app.sub_title = self.previous_sub_title
