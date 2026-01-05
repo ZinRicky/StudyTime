@@ -88,6 +88,13 @@ class SubjectEditEntry(NamedTuple):
         )
 
 
+class SessionEntry(NamedTuple):
+    session_id: str
+    subject_name: str
+    start_time: str
+    duration: int
+
+
 class Config:
     def __init__(self, filename: str = "config.json") -> None:
         """
@@ -309,7 +316,7 @@ class MainMenuScreen(Screen):
 
     def on_list_view_highlighted(self, highlighted_item: ListView.Highlighted) -> None:
         for item in highlighted_item.list_view.query(ListItem):
-            if "-highlight" in item.classes:
+            if item.has_class("-highlight"):
                 item.query_one(Label).update("> " + str(item.query_one(Label).content))
             else:
                 item.query_one(Label).update(
@@ -324,6 +331,9 @@ class MainMenuScreen(Screen):
             case 1:
                 self.app.install_screen(SubjectsScreen(), "Edit-Subjects")
                 self.app.push_screen("Edit-Subjects")
+            case 2:
+                self.app.install_screen(SessionsScreen(), "Edit-Sessions")
+                self.app.push_screen("Edit-Sessions")
 
     def on_key(self, event: events.Key) -> None:
         if event.name in "1234":
@@ -671,6 +681,101 @@ class SubjectsScreen(Screen):
         self.app.uninstall_screen(self)
 
 
+class SessionsScreen(Screen):
+    BINDINGS = [
+        Binding(
+            "d",
+            "delete_session",
+            "Delete",
+            show=True,
+            tooltip="Delete the currently selected session.",
+        ),
+        Binding(
+            "escape",
+            "back_to_main_menu",
+            "Main Menu",
+            show=True,
+            tooltip="Go back to the main menu.",
+        ),
+        Binding(
+            "f5",
+            "refresh_table",
+            "Refresh table layout",
+            show=False,
+            tooltip="Force the refresh of the table layout.",
+        ),
+    ]
+
+    async def on_mount(self) -> None:
+        self.previous_sub_title: str = self.app.sub_title
+        self.app.sub_title = "Saved sessions"
+        self.query_one("#sessions-table", DataTable).cursor_type = "row"
+        self.refresh_table()
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield DataTable(id="sessions-table")
+        # yield Pretty("Test")
+        yield Footer(show_command_palette=False)
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowSelected) -> None:
+        self.current_hi_row: int = event.cursor_row
+        self.current_hi_row_key: RowKey = event.row_key
+
+    def refresh_table(self) -> None:
+        my_tui_table: DataTable = self.query_one("#sessions-table", DataTable)
+        my_tui_table.clear(columns=True)
+        for col in ("Subject", "Start time", "Duration"):
+            my_tui_table.add_column(col, key=col)
+        my_session_data: list[SessionEntry] = [
+            SessionEntry(*session_row)
+            for session_row in self.app.st_database.db_query(
+                "SELECT "
+                + "fact.session_id, "
+                + "dim.subject_name, "
+                + "fact.start_time, "
+                + "fact.duration "
+                + "FROM fact_session AS fact "
+                + "JOIN dim_subject AS dim "
+                + "on dim.subject_id = fact.subject_id "
+                + "ORDER BY fact.start_time DESC;"
+            )
+        ]
+        if my_session_data:
+            for row in my_session_data:
+                my_tui_table.add_row(*row[1:], key=row[0])
+        # self.query_one(Pretty).update(my_tui_table.rows)
+        my_tui_table.sort("Start time", reverse=True)
+
+    def action_delete_session(self) -> None:
+        def db_delete_session(result: bool | None) -> None:
+            if result:
+                self.app.st_database.db_execute(
+                    "DELETE FROM fact_session WHERE session_id = ?;",
+                    (self.current_hi_row_key.value,),
+                    commit=True,
+                )
+                self.refresh_table()
+
+        if self.query_one("#sessions-table", DataTable).row_count:
+            self.app.push_screen(DeleteSessionScreen(), db_delete_session)
+        else:
+            self.app.notify(
+                "There is no session to delete",
+                title="Error",
+                severity="error",
+                timeout=1,
+            )
+
+    def action_refresh_table(self) -> None:
+        self.refresh_table()
+
+    def action_back_to_main_menu(self) -> None:
+        self.app.sub_title = self.previous_sub_title
+        self.app.pop_screen()
+        self.app.uninstall_screen(self)
+
+
 class ConfirmExitScreen(ModalScreen):
     def compose(self) -> ComposeResult:
         yield Grid(
@@ -867,6 +972,36 @@ class DeleteSubjectScreen(ModalScreen):
                 self.app.action_focus_next()
 
 
+class DeleteSessionScreen(ModalScreen):
+    def compose(self) -> ComposeResult:
+        yield Grid(
+            Label(
+                "Do you want to delete this session?",
+                id="prompt",
+            ),
+            Button("Yes", variant="success", id="done-button"),
+            Button("No", variant="error", id="cancel-button"),
+            id="dialog",
+        )
+
+    async def on_button_pressed(self, button: Button.Pressed):
+        match button.button.id:
+            case "done-button":
+                self.dismiss(True)
+            case "cancel-button":
+                self.dismiss(False)
+
+    def on_key(self, event: events.Key) -> None:
+        match event.name:
+            case "escape":
+                self.dismiss(None)
+                event.stop()
+            case "left":
+                self.app.action_focus_previous()
+            case "right":
+                self.app.action_focus_next()
+
+
 class StudyTimeApp(App):
     TITLE = "StudyTime"
     SUB_TITLE = "Main Menu"
@@ -952,8 +1087,8 @@ class StudyTimeApp(App):
         }
     }
 
-    SubjectsScreen {
-        #subjects-table {
+    SubjectsScreen, SessionsScreen {
+        DataTable {
             width: auto;
         }
     }
@@ -990,7 +1125,7 @@ class StudyTimeApp(App):
         }
     }
 
-    AddSubjectScreen, EditSubjectScreen, DeleteSubjectScreen {
+    AddSubjectScreen, EditSubjectScreen, DeleteSubjectScreen, DeleteSessionScreen {
         align: center middle;
 
         #dialog {
@@ -1022,7 +1157,7 @@ class StudyTimeApp(App):
         }
     }
 
-    DeleteSubjectScreen {
+    DeleteSubjectScreen, DeleteSessionScreen {
         #dialog {
             grid-rows: 1fr 3;
         }
