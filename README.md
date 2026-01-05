@@ -36,6 +36,9 @@ uv run main.py
 
 ## Screenshots
 
-| Main menu                                            | Study session                                | Subject management                                 |
-| ---------------------------------------------------- | -------------------------------------------- | -------------------------------------------------- |
-| ![Main menu of the application](./img/main-menu.svg) | ![Study sessions’ screen](./img/session.svg) | ![Subjects’ management screen](./img/subjects.svg) |
+| Screen                | Screenshot (with default theme)                          |
+| --------------------- | -------------------------------------------------------- |
+| Main menu             | ![Main menu of the application](./img/main-menu.svg)     |
+| Study session tracker | ![Study sessions tracker screen](./img/session.svg)      |
+| Subjects’ manager     | ![Subjects’ management screen](./img/subjects.svg)       |
+| Sessions viewer       | ![Study sessions’ management screen](./img/sessions.svg) |
