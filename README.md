@@ -30,8 +30,8 @@ uv run main.py
 - [x] Add, edit and delete subjects
 - [x] Track study sessions by subject
 - [x] Delete study sessions
+- [x] Show summary plots
 - [ ] Export sessions’ log to CSV
-- [ ] Show summary plots
 - [ ] Tweak default behaviours via JSON configuration file
 
 ## Screenshots

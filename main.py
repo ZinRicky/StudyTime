@@ -1,12 +1,13 @@
 import json
 import sqlite3
 
+from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Center, Grid
+from textual.containers import Center, Grid, HorizontalGroup, VerticalGroup
 from textual.message import Message
 from textual.reactive import reactive
 from textual.screen import Screen, ModalScreen
@@ -22,9 +23,11 @@ from textual.widgets import (
     ListItem,
     ListView,
     Pretty,
+    ProgressBar,
     Select,
 )
 from textual.widgets.data_table import RowKey
+from textual_plotext import PlotextPlot
 from time import monotonic
 from typing import NamedTuple
 from uuid import uuid4
@@ -296,6 +299,70 @@ class SessionTimer(Digits):
         self.total_time = 0.0
 
 
+class StudyBarPlot(PlotextPlot):
+    def on_mount(self) -> None:
+        plot_data: list[tuple[str, str, float]] = self.app.st_database.db_query(
+            "SELECT date(fact.start_time) AS day, "
+            + "dim.subject_name, "
+            + "ROUND(CAST(sum(fact.duration) AS REAL) / 3600, 4) AS hours "
+            + "FROM fact_session AS fact "
+            + "JOIN dim_subject AS dim "
+            + "ON dim.subject_id = fact.subject_id "
+            + "WHERE date(fact.start_time) >= date('now', '-7 days') "
+            + "GROUP BY date(fact.start_time), dim.subject_name "
+            + "ORDER BY date(fact.start_time), dim.subject_name;"
+        )
+        plot_refined_data: defaultdict[str, defaultdict[str, float]] = defaultdict(
+            lambda: defaultdict(float)
+        )
+        for day, subject, hours in plot_data:
+            plot_refined_data[day][subject] = hours
+
+        days: list[str] = sorted(list({x[0] for x in plot_data}))
+        subjects: list[str] = sorted(list({x[1] for x in plot_data}))
+
+        self.plt.stacked_bar(
+            days,
+            [[plot_refined_data[day][subject] for day in days] for subject in subjects],
+            labels=subjects,
+        )
+        self.plt.title("Study load during last week")
+        self.plt.xlabel("Date")
+        self.plt.ylabel("Studied hours")
+
+        current_theme: Theme | None = self.app.get_theme(self.app.theme)
+        if current_theme is not None:
+            self.plt.theme(
+                "textual-design-dark" if current_theme.dark else "textual-design-light"
+            )
+
+
+class StudyBreakdownPlot(VerticalGroup):
+    def __init__(self) -> None:
+        super().__init__()
+
+        query_data: list[tuple[str, int]] = self.app.st_database.db_query(
+            "SELECT DISTINCT "
+            + "dim.subject_name, "
+            + "CAST((sum(fact.duration) OVER (PARTITION BY dim.subject_name)) AS REAL) / "
+            + "(sum(fact.duration) OVER (RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)) AS percentage "
+            + "FROM fact_session AS fact "
+            + "JOIN dim_subject AS dim "
+            + "ON dim.subject_id = fact.subject_id;"
+        )
+        self.subjects: dict[str, float] = {x[0]: x[1] for x in query_data}
+
+    def compose(self) -> ComposeResult:
+        yield Label("[$primary]Break-down by subject[/]", id="study-breakdown-title")
+        for key in self.subjects:
+            yield Label(key)
+            yield ProgressBar(total=1, show_eta=False, id=f"progress-{key}")
+
+    async def on_mount(self) -> None:
+        for key, value in self.subjects.items():
+            self.query_one(f"#progress-{key}", ProgressBar).update(progress=value)
+
+
 class MainMenuScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
@@ -334,6 +401,9 @@ class MainMenuScreen(Screen):
             case 2:
                 self.app.install_screen(SessionsScreen(), "Edit-Sessions")
                 self.app.push_screen("Edit-Sessions")
+            case 3:
+                self.app.install_screen(PlotsScreen(), "Plots")
+                self.app.push_screen("Plots")
 
     def on_key(self, event: events.Key) -> None:
         if event.name in "1234":
@@ -776,6 +846,32 @@ class SessionsScreen(Screen):
         self.app.uninstall_screen(self)
 
 
+class PlotsScreen(Screen):
+    BINDINGS = [
+        Binding(
+            "escape",
+            "back_to_main_menu",
+            "Main Menu",
+            show=True,
+            tooltip="Go back to the main menu.",
+        )
+    ]
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Grid(StudyBreakdownPlot(), StudyBarPlot(id="study-bar-plot"), id="plots")
+        yield Footer(show_command_palette=False)
+
+    def on_mount(self) -> None:
+        self.previous_sub_title: str = self.app.sub_title
+        self.app.sub_title = "Summary plots"
+
+    def action_back_to_main_menu(self) -> None:
+        self.app.sub_title = self.previous_sub_title
+        self.app.pop_screen()
+        self.app.uninstall_screen(self)
+
+
 class ConfirmExitScreen(ModalScreen):
     def compose(self) -> ComposeResult:
         yield Grid(
@@ -1093,6 +1189,16 @@ class StudyTimeApp(App):
         }
     }
 
+    PlotsScreen {
+        #plots {
+            grid-size: 2 1;
+            grid-gutter: 1 2;
+            grid-columns: 1fr 1fr;
+            width: 100%;
+            max-height: 90%;
+        }
+    }
+
     ConfirmExitScreen {
         align: center middle;
 
@@ -1160,6 +1266,23 @@ class StudyTimeApp(App):
     DeleteSubjectScreen, DeleteSessionScreen {
         #dialog {
             grid-rows: 1fr 3;
+        }
+    }
+
+    StudyBreakdownPlot {
+        layout: grid;
+        grid-size: 2;
+        grid-columns: 1fr 2fr;
+        grid-gutter: 1;
+
+        #study-breakdown-title {
+            column-span: 2;
+            text-align: center;
+            width: 100%;
+        }
+
+        ProgressBar {
+            width: 100%;
         }
     }
     """
