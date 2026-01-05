@@ -7,6 +7,7 @@ from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Center, Grid
+from textual.message import Message
 from textual.reactive import reactive
 from textual.screen import Screen, ModalScreen
 from textual.theme import Theme
@@ -24,6 +25,7 @@ from textual.widgets import (
     Select,
 )
 from textual.widgets.data_table import RowKey
+from time import monotonic
 from typing import NamedTuple
 from uuid import uuid4
 
@@ -238,7 +240,53 @@ class Database:
 
 
 class SessionTimer(Digits):
-    pass
+    """A widget to display elapsed time."""
+
+    start_time: reactive[float] = reactive(monotonic)
+    previous_time: reactive[float] = reactive(0.0)
+    total_time: reactive[float] = reactive(0.0)
+
+    class ElapsedTime(Message):
+        def __init__(self, elapsed_time: float) -> None:
+            self.seconds: int = int(elapsed_time)
+            super().__init__()
+
+    def on_mount(self) -> None:
+        """Event handler called when widget is added to the app."""
+        self.update_timer = self.set_interval(1 / 30, self.update_time, pause=True)
+
+    def update_time(self) -> None:
+        """Method to update time to current."""
+        right_now: float = monotonic()
+        self.total_time += right_now - self.previous_time
+        self.previous_time = right_now
+
+    def watch_total_time(self, time: float) -> None:
+        """Called when the time attribute changes."""
+        minutes, seconds = divmod(time, 60)
+        hours, minutes = divmod(minutes, 60)
+        self.update(f"{hours:02.0f}:{minutes:02.0f}:{seconds:02.0f}")
+
+    def start(self) -> None:
+        """Method to start (or resume) time updating."""
+        self.start_time = monotonic()
+        self.previous_time = self.start_time
+        self.update_timer.resume()
+
+    def stop(self) -> None:
+        """Method to stop the time display updating."""
+        right_now: float = monotonic()
+        self.update_timer.pause()
+        self.total_time += right_now - self.previous_time
+
+    def reset(self) -> None:
+        """Method to reset the time display to zero."""
+        self.post_message(self.ElapsedTime(self.total_time))
+        self.total_time = 0.0
+
+    def force_reset(self) -> None:
+        self.stop()
+        self.total_time = 0.0
 
 
 class MainMenuScreen(Screen):
@@ -286,14 +334,25 @@ class MainMenuScreen(Screen):
 class StudySessionScreen(Screen):
     BINDINGS = [
         Binding(
+            "ctrl_z",
+            "force_reset",
+            "Cancel current session",
+            show=True,
+            tooltip="Forcefully reset the timer and delete the current study session.",
+        ),
+        Binding(
             "escape",
             "back_to_main_menu",
             "Main Menu",
             show=True,
             tooltip="Decide whether you want to save the current "
             + "study session (if any) and go back to the main menu.",
-        )
+        ),
     ]
+
+    session_id = ""
+    start_time = ""
+    end_time = ""
 
     def on_mount(self) -> None:
         self.previous_sub_title: str = self.app.sub_title
@@ -305,23 +364,117 @@ class StudySessionScreen(Screen):
             yield SessionTimer("00:00:00", id="session-timer")
         with Center():
             yield Grid(
-                Button("Start", variant="success", id="study-session-start-pause"),
+                Button(
+                    "Start", id="study-session-start-pause", classes="-success start"
+                ),
                 Select(
                     self.app.st_database.db_query(
                         "SELECT subject_name, subject_id from dim_subject ORDER BY subject_name;"
                     ),
                     prompt="Select subject",
                 ),
-                Button("Stop", variant="error", disabled=True),
+                Button("Stop", variant="error", disabled=True, id="study-session-stop"),
                 id="study-session-commands",
             )
         # yield Pretty("")
         yield Footer(show_command_palette=False)
 
+    def action_force_reset(self) -> None:
+        self.query_one("#session-timer", SessionTimer).force_reset()
+
+        self.query_one("#study-session-stop").disabled = True
+        self.query_one(Select).disabled = False
+
+        play_button: Button = self.query_one("#study-session-start-pause", Button)
+        play_button.label = "Play"
+        play_button.remove_class("-warning")
+        play_button.add_class("start")
+        play_button.add_class("-success")
+
     def action_back_to_main_menu(self) -> None:
         self.app.sub_title = self.previous_sub_title
         self.app.pop_screen()
         self.app.uninstall_screen(self)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Event handler called when a button is pressed."""
+        time_display: SessionTimer = self.query_one("#session-timer", SessionTimer)
+        # self.query_one(Pretty).update(self.query_one(Select).value)
+        match event.button.id:
+            case "study-session-start-pause":
+                if event.button.has_class("-success"):
+                    if self.query_one(Select).value == Select.BLANK:
+                        self.notify(
+                            "Please select a subject first.",
+                            title="Error",
+                            severity="error",
+                            timeout=1,
+                        )
+                    else:
+                        if event.button.has_class("start"):
+                            self.session_id = str(uuid4())
+                            while self.session_id in {
+                                x[0]
+                                for x in self.app.st_database.db_query(
+                                    "SELECT session_id FROM fact_session;"
+                                )
+                            }:
+                                self.session_id = str(uuid4())
+                            self.start_time = datetime.now(tz=timezone.utc).isoformat()
+                            event.button.remove_class("start")
+                        time_display.start()
+                        event.button.remove_class("-success")
+                        event.button.add_class("-warning")
+                        event.button.label = "Pause"
+                        self.query_one("#study-session-stop").disabled = False
+                        self.query_one(Select).disabled = True
+                    self.refresh_bindings()
+
+                else:
+                    time_display.stop()
+                    event.button.remove_class("-warning")
+                    event.button.add_class("-success")
+                    event.button.label = "Resume"
+                    self.refresh_bindings()
+            case "study-session-stop":
+                self.end_time = datetime.now(tz=timezone.utc).isoformat()
+                time_display.stop()
+                time_display.reset()
+
+                self.query_one("#study-session-stop").disabled = True
+                self.query_one(Select).disabled = False
+
+                play_button: Button = self.query_one(
+                    "#study-session-start-pause", Button
+                )
+                play_button.label = "Play"
+                play_button.remove_class("-warning")
+                play_button.add_class("start")
+                play_button.add_class("-success")
+
+                self.refresh_bindings()
+
+    def on_session_timer_elapsed_time(self, message: SessionTimer.ElapsedTime) -> None:
+        elapsed_time: int = message.seconds
+        if elapsed_time:
+            self.app.st_database.db_execute(
+                "INSERT INTO fact_session VALUES(?, ?, ?, ?, ?);",
+                (
+                    self.session_id,
+                    self.query_one(Select).value,
+                    self.start_time,
+                    self.end_time,
+                    elapsed_time,
+                ),
+                commit=True,
+            )
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action == "force_reset":
+            return not self.query_one("#study-session-start-pause", Button).has_class(
+                "start"
+            )
+        return True
 
 
 class SubjectsScreen(Screen):
